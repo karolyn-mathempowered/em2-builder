@@ -64,12 +64,24 @@ def detect_sort_lessons(sorts_pptx):
     return mapping
 
 # ---------- rendering / image ops ----------
+# Optional map of {source_pptx_path: pre_rendered_pdf_path}. When a source file
+# has an entry here, we skip the memory-heavy LibreOffice step and rasterize the
+# supplied PDF directly with pdftoppm (poppler), which uses far less memory.
+PRERENDERED_PDFS = {}
+
 def render_to_pngs(pptx,outdir,prefix,dpi=150):
-    os.makedirs(outdir,exist_ok=True); work=tempfile.mkdtemp(); shutil.copy(pptx,work)
-    base=os.path.join(work,os.path.basename(pptx))
-    subprocess.run(["soffice","--headless","--convert-to","pdf","--outdir",work,base],
-                   check=True,capture_output=True,timeout=300,env={**os.environ,"HOME":work})
-    pdf=base.rsplit('.',1)[0]+'.pdf'
+    os.makedirs(outdir,exist_ok=True); work=tempfile.mkdtemp()
+    supplied=PRERENDERED_PDFS.get(pptx)
+    if supplied and os.path.exists(supplied):
+        # Use the pre-rendered PDF; no LibreOffice needed.
+        pdf=supplied
+    else:
+        # Fall back to converting the pptx with LibreOffice (original behaviour).
+        shutil.copy(pptx,work)
+        base=os.path.join(work,os.path.basename(pptx))
+        subprocess.run(["soffice","--headless","--convert-to","pdf","--outdir",work,base],
+                       check=True,capture_output=True,timeout=300,env={**os.environ,"HOME":work})
+        pdf=base.rsplit('.',1)[0]+'.pdf'
     subprocess.run(["pdftoppm","-png","-r",str(dpi),pdf,os.path.join(outdir,prefix)],check=True)
     return sorted(glob.glob(os.path.join(outdir,prefix+"*.png")))
 
@@ -371,6 +383,14 @@ def auto_topics(L_nums):
 
 def build(args):
     global ASSETS; ASSETS=args.assets
+    # If pre-rendered PDFs were supplied (to skip LibreOffice / save memory),
+    # register them keyed by their source pptx path.
+    PRERENDERED_PDFS.clear()
+    for src_attr, pdf_attr in (("mathtalks","mathtalks_pdf"),("sorts","sorts_pdf"),
+                               ("answerguides","answerguides_pdf"),("dares","dares_pdf")):
+        src=getattr(args, src_attr, None); pdf=getattr(args, pdf_attr, None)
+        if src and pdf and os.path.exists(pdf):
+            PRERENDERED_PDFS[src]=pdf
     tmp=tempfile.mkdtemp(); img=os.path.join(tmp,'img'); os.makedirs(img,exist_ok=True)
     print("Reading DARE problems…")
     grade,module,dares=detect_dares(args.dares)

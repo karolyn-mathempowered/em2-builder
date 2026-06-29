@@ -1,12 +1,12 @@
 """
 EM2 Module Builder — backend API.
-Wraps build_module.py behind a single endpoint that a web app can call.
-Accepts the 4 source .pptx/.pdf files and returns the finished deck.
+Wraps build_module.py behind a single endpoint that a web app (e.g. a Lovable
+frontend) can call. Accepts the 4 source .pptx files and returns the finished deck.
 
 Run locally:   uvicorn server:app --reload --port 8000
 Deploy:        see Dockerfile (installs LibreOffice + poppler + python deps)
 """
-import os, tempfile, traceback
+import os, tempfile
 from types import SimpleNamespace
 from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -18,9 +18,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 
 app = FastAPI(title="EM2 Module Builder")
+# Allow the Lovable app (and local dev) to call this API from the browser.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
-
 
 def _save(upload: UploadFile, folder: str) -> str:
     path = os.path.join(folder, os.path.basename(upload.filename or "file.pptx"))
@@ -28,28 +28,13 @@ def _save(upload: UploadFile, folder: str) -> str:
         f.write(upload.file.read())
     return path
 
-
 def _toint(x):
-    try:
-        return int(str(x).strip())
-    except Exception:
-        return None
-
+    try: return int(str(x).strip())
+    except Exception: return None
 
 @app.get("/health")
 def health():
-    try:
-        assets = os.listdir(ASSETS) if os.path.isdir(ASSETS) else []
-    except Exception:
-        assets = []
-    return {
-        "ok": True,
-        "service": "em2-module-builder",
-        "assets_dir": ASSETS,
-        "assets_loaded": len(assets),
-        "has_logo": os.path.exists(os.path.join(ASSETS, "logo.png")),
-    }
-
+    return {"ok": True, "service": "em2-module-builder"}
 
 @app.post("/generate")
 async def generate(
@@ -57,6 +42,12 @@ async def generate(
     dares: UploadFile = File(...),
     answerguides: UploadFile = File(...),
     sorts: Optional[UploadFile] = File(None),
+    # Optional pre-rendered PDFs. When supplied, the server skips LibreOffice for
+    # that file and rasterizes the PDF instead (much lower memory use).
+    mathtalks_pdf: Optional[UploadFile] = File(None),
+    dares_pdf: Optional[UploadFile] = File(None),
+    answerguides_pdf: Optional[UploadFile] = File(None),
+    sorts_pdf: Optional[UploadFile] = File(None),
     title: Optional[str] = Form(None),
     grade: Optional[str] = Form(None),
     module: Optional[str] = Form(None),
@@ -67,22 +58,23 @@ async def generate(
         dr = _save(dares, work)
         ag = _save(answerguides, work)
         so = _save(sorts, work) if sorts is not None else None
+        mt_pdf = _save(mathtalks_pdf, work) if mathtalks_pdf is not None else None
+        dr_pdf = _save(dares_pdf, work) if dares_pdf is not None else None
+        ag_pdf = _save(answerguides_pdf, work) if answerguides_pdf is not None else None
+        so_pdf = _save(sorts_pdf, work) if sorts_pdf is not None else None
         out = os.path.join(work, "module.pptx")
-        ns = SimpleNamespace(
-            mathtalks=mt, sorts=so, dares=dr, answerguides=ag,
-            out=out, title=(title or None), topics=None,
-            grade=_toint(grade), module=_toint(module), assets=ASSETS,
-        )
+        ns = SimpleNamespace(mathtalks=mt, sorts=so, dares=dr, answerguides=ag,
+                             mathtalks_pdf=mt_pdf, sorts_pdf=so_pdf,
+                             dares_pdf=dr_pdf, answerguides_pdf=ag_pdf,
+                             out=out, title=(title or None), topics=None,
+                             grade=_toint(grade), module=_toint(module), assets=ASSETS)
         build_module.build(ns)
         if not os.path.exists(out):
             raise HTTPException(500, "Deck was not produced.")
-        fname = ((title or "Module").strip().replace(" ", "_") or "Module") + ".pptx"
-        return FileResponse(
-            out, filename=fname,
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
+        fname = ((title or "EM2_Module").strip().replace(" ", "_") or "EM2_Module") + ".pptx"
+        return FileResponse(out, filename=fname,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
