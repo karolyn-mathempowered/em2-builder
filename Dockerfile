@@ -8,9 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+
+# Copy app code, template, and assets explicitly so nothing is missed
+COPY server.py build_module.py ./
+COPY EM2_Lesson_Template.pptx ./
+COPY assets/ ./assets/
 
 ENV PORT=8000
 EXPOSE 8000
