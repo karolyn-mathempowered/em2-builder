@@ -8,11 +8,13 @@ Deploy:        see Dockerfile (installs LibreOffice + poppler + python deps)
 """
 import os, tempfile
 from types import SimpleNamespace
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import build_module
+import build_kit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
@@ -93,9 +95,6 @@ def debug_fetch(id: str):
         "bytes": len(r.content),
         "head": r.content[:8].decode("latin-1"),
     }
-  from pydantic import BaseModel
-from typing import List
-import build_kit
 
 
 class KitItem(BaseModel):
