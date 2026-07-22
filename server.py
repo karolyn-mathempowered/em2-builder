@@ -78,3 +78,16 @@ async def generate(
         raise
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+      @app.get("/debug/fetch")
+def debug_fetch(id: str):
+    import requests
+    r = requests.get(
+        f"https://drive.google.com/uc?export=download&id={id}",
+        allow_redirects=True,
+    )
+    return {
+        "status": r.status_code,
+        "ctype": r.headers.get("content-type"),
+        "bytes": len(r.content),
+        "head": r.content[:8].decode("latin-1"),
+    }
