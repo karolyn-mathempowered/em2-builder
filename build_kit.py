@@ -97,16 +97,43 @@ def _prep_image(url, workdir, tag):
 # ---------- build ----------
 def build_from_kit(kit, out_path, assets, dpi=150):
     """
-    kit = {
-      "title": str, "grade": int|str, "resource_type": "dare"|"sort"|"math_talk",
-      "items": [{"name": str, "standard": str, "url": str}, ...]
-    }
-    Item i becomes Lesson i.
+    Build a lesson deck from one or more saved kits. Position is the lesson
+    index: item i of each list becomes Lesson i.
+
+    Preferred shape (three kits zipped by position):
+      kit = {
+        "title": str, "grade": int|str,
+        "dares":      [{"name","standard","url"}, ...],
+        "sorts":      [...],
+        "math_talks": [...]
+      }
+
+    Legacy single-kit shape is still accepted:
+      kit = {"title","grade","resource_type","items":[...]}
+
+    Lists may differ in length. The deck runs for as many lessons as the
+    LONGEST list; shorter lists simply leave that lesson's slides as empty
+    dropzone placeholders rather than shifting items into the wrong lesson.
     """
     BM.ASSETS = assets
-    rtype = (kit.get("resource_type") or "dare").strip()
-    items = kit.get("items") or []
-    if not items:
+
+    dares = list(kit.get("dares") or [])
+    sorts = list(kit.get("sorts") or [])
+    talks = list(kit.get("math_talks") or [])
+
+    # Legacy single-kit payload: route "items" into the right list.
+    if not (dares or sorts or talks):
+        rtype = (kit.get("resource_type") or "dare").strip()
+        items = list(kit.get("items") or [])
+        if rtype == "dare":
+            dares = items
+        elif rtype == "sort":
+            sorts = items
+        elif rtype == "math_talk":
+            talks = items
+
+    n_lessons = max(len(dares), len(sorts), len(talks))
+    if n_lessons == 0:
         raise ValueError("Kit contains no items.")
 
     grade = kit.get("grade")
@@ -119,26 +146,44 @@ def build_from_kit(kit, out_path, assets, dpi=150):
     img = os.path.join(tmp, "img")
     os.makedirs(img, exist_ok=True)
 
-    L_nums = list(range(1, len(items) + 1))
+    def at(lst, i):
+        return lst[i - 1] if i - 1 < len(lst) else None
+
+    L_nums = list(range(1, n_lessons + 1))
     ccss_map = {}
     mt_by, sort_cells, ag_map = {}, {}, {}
 
-    for i, it in enumerate(items, start=1):
-        ccss_map[i] = (it.get("standard") or "").strip()
-        url = it.get("url") or ""
-        tag = f"L{i}"
-        try:
-            if rtype == "dare":
-                ag_map[i] = _prep_dare(url, img, tag)
-            elif rtype == "math_talk":
-                p = _prep_image(url, img, tag)
-                mt_by[i] = [p] if p else [None]
-            elif rtype == "sort":
-                p = _prep_image(url, img, tag)
+    for i in L_nums:
+        d, s, t = at(dares, i), at(sorts, i), at(talks, i)
+
+        # CCSS for the lesson footer: prefer the DARE's standard, then the
+        # sort's, then the math talk's.
+        std = ""
+        for it in (d, s, t):
+            if it and (it.get("standard") or "").strip():
+                std = it["standard"].strip()
+                break
+        ccss_map[i] = std
+
+        if d and d.get("url"):
+            try:
+                ag_map[i] = _prep_dare(d["url"], img, f"d{i}")
+            except Exception as e:
+                print(f"  (lesson {i} dare: {e})")
+        if t and t.get("url"):
+            try:
+                p = _prep_image(t["url"], img, f"t{i}")
                 if p:
-                    sort_cells[i] = BM.crop_sort_cells(p, img, tag)
-        except Exception as e:
-            print(f"  (lesson {i}: {e})")
+                    mt_by[i] = [p]
+            except Exception as e:
+                print(f"  (lesson {i} math talk: {e})")
+        if s and s.get("url"):
+            try:
+                p = _prep_image(s["url"], img, f"s{i}")
+                if p:
+                    sort_cells[i] = BM.crop_sort_cells(p, img, f"s{i}")
+            except Exception as e:
+                print(f"  (lesson {i} sort: {e})")
 
     # Every lesson needs a math-talk slot so the plan stays uniform.
     for n in L_nums:
@@ -196,7 +241,7 @@ def build_from_kit(kit, out_path, assets, dpi=150):
             BM.b_randroutine(prs, MT, L)
         elif sec == "dareroutine":
             # Question text and word bank are not stored in lab_items; the
-            # builder renders "—" for empty strings.
+            # builder renders "\u2014" for empty strings.
             BM.b_dare_routine(prs, MT, L, "", "")
         elif sec == "dareguide":
             BM.b_dareguide(prs, MT, L, ag_map.get(L))
