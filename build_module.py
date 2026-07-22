@@ -43,7 +43,13 @@ def detect_dares(dares_pptx):
     for t in texts:
         gm=re.search(r'Grade\s*(\d+),\s*Module\s*(\d+)',t)
         if gm and grade is None: grade,module=int(gm.group(1)),int(gm.group(2))
-        ln=re.search(r'Lesson\s*(\d+)',t)
+        # Lesson labels appear in two conventions across our source decks:
+        #   long form  -> "Lesson 1", "Lesson 2", ...
+        #   short form -> "L1 Question:", "L2 Question:", ...
+        # Match the long form first (existing behaviour), then fall back to the
+        # short form. The short-form pattern is anchored to "Question" so a bare
+        # token like an L in a standard code can't be mistaken for a lesson.
+        ln=re.search(r'Lesson\s*(\d+)',t) or re.search(r'\bL(\d+)\s*Question',t)
         if not ln: continue
         n=int(ln.group(1))
         q=re.search(r'L\d+\s*Question:\s*(.*?)\s*Answer Statement:',t,re.S)
