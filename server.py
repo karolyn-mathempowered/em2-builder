@@ -3,6 +3,10 @@ EM2 Module Builder — backend API.
 Wraps build_module.py behind a single endpoint that a web app (e.g. a Lovable
 frontend) can call. Accepts the 4 source .pptx files and returns the finished deck.
 
+Also exposes /generate-from-kit, which builds a deck from Resource Lab saved
+kits (DARE / Sort / Math Talk) zipped by position: item i of each list becomes
+Lesson i.
+
 Run locally:   uvicorn server:app --reload --port 8000
 Deploy:        see Dockerfile (installs LibreOffice + poppler + python deps)
 """
@@ -82,9 +86,6 @@ async def generate(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-
-
-
 class KitItem(BaseModel):
     name: Optional[str] = None
     standard: Optional[str] = None
@@ -94,8 +95,13 @@ class KitItem(BaseModel):
 class KitRequest(BaseModel):
     title: Optional[str] = None
     grade: Optional[str] = None
-    resource_type: str = "dare"
-    items: List[KitItem]
+    # Legacy single-kit payload.
+    resource_type: Optional[str] = None
+    items: Optional[List[KitItem]] = None
+    # Three kits zipped by position: item i of each becomes Lesson i.
+    dares: Optional[List[KitItem]] = None
+    sorts: Optional[List[KitItem]] = None
+    math_talks: Optional[List[KitItem]] = None
 
 
 @app.post("/generate-from-kit")
@@ -103,12 +109,17 @@ def generate_from_kit(req: KitRequest):
     work = tempfile.mkdtemp()
     try:
         out = os.path.join(work, "kit.pptx")
+        def L(x):
+            return [i.dict() for i in (x or [])]
         build_kit.build_from_kit(
             {
                 "title": req.title,
                 "grade": req.grade,
                 "resource_type": req.resource_type,
-                "items": [i.dict() for i in req.items],
+                "items": L(req.items),
+                "dares": L(req.dares),
+                "sorts": L(req.sorts),
+                "math_talks": L(req.math_talks),
             },
             out,
             ASSETS,
