@@ -93,3 +93,48 @@ def debug_fetch(id: str):
         "bytes": len(r.content),
         "head": r.content[:8].decode("latin-1"),
     }
+  from pydantic import BaseModel
+from typing import List
+import build_kit
+
+
+class KitItem(BaseModel):
+    name: Optional[str] = None
+    standard: Optional[str] = None
+    url: str
+
+
+class KitRequest(BaseModel):
+    title: Optional[str] = None
+    grade: Optional[str] = None
+    resource_type: str = "dare"
+    items: List[KitItem]
+
+
+@app.post("/generate-from-kit")
+def generate_from_kit(req: KitRequest):
+    work = tempfile.mkdtemp()
+    try:
+        out = os.path.join(work, "kit.pptx")
+        build_kit.build_from_kit(
+            {
+                "title": req.title,
+                "grade": req.grade,
+                "resource_type": req.resource_type,
+                "items": [i.dict() for i in req.items],
+            },
+            out,
+            ASSETS,
+        )
+        if not os.path.exists(out):
+            raise HTTPException(500, "Deck was not produced.")
+        fname = ((req.title or "EM2_Kit").strip().replace(" ", "_") or "EM2_Kit") + ".pptx"
+        return FileResponse(
+            out,
+            filename=fname,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
