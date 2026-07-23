@@ -142,6 +142,15 @@ def build_from_kit(kit, out_path, assets, dpi=150):
     except Exception:
         pass
 
+    # The teacher's own label for this kit ("1", "Unit 1", "Module 3"...). A kit
+    # can span modules, so there is no module number to derive from the data --
+    # whatever the teacher typed is what the deck shows. Falls back to the kit
+    # title, then to a dash if neither is given.
+    module_label = kit.get("module")
+    module_label = str(module_label).strip() if module_label not in (None, "") else ""
+    if not module_label:
+        module_label = "—"
+
     tmp = tempfile.mkdtemp()
     img = os.path.join(tmp, "img")
     os.makedirs(img, exist_ok=True)
@@ -207,7 +216,7 @@ def build_from_kit(kit, out_path, assets, dpi=150):
 
     MT = {
         "grade": grade,
-        "module": "—",          # a kit spans modules; no single module number
+        "module": module_label,
         "title": kit.get("title") or "Saved Kit",
         "topics": topics,
         "lesson_ccss": ccss_map,
