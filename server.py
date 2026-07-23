@@ -121,6 +121,7 @@ def generate_from_kit(req: KitRequest):
                 "dares": L(req.dares),
                 "sorts": L(req.sorts),
                 "math_talks": L(req.math_talks),
+                "module": req.module,
             },
             out,
             ASSETS,
