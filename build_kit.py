@@ -61,20 +61,53 @@ def _is_pdf(path):
 
 
 # ---------- per-item asset prep ----------
+def _dare_text(pdf):
+    """Pull the Question and Words text off page 1 of a DARE PDF.
+
+    These fields are not stored in lab_items -- they only exist inside the PDF --
+    but the decks were generated from PPTX so page 1 has a real text layer and
+    needs no OCR. Returns ("", "") if anything is missing rather than raising:
+    the slide builder renders an em dash for empty strings.
+    """
+    try:
+        out = subprocess.run(["pdftotext", "-layout", "-f", "1", "-l", "1", pdf, "-"],
+                             check=True, capture_output=True, timeout=60)
+        t = out.stdout.decode("utf-8", "replace")
+    except Exception:
+        return "", ""
+
+    def grab(pattern):
+        m = re.search(pattern, t, re.S | re.I | re.M)
+        if not m:
+            return ""
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+
+    # Question runs until "Answer Statement:"; Words runs until the CCSS code or
+    # the copyright line at the foot of the page.
+    question = grab(r"Question:\s*(.*?)\s*Answer Statement:")
+    # The footer sits after a run of blank lines: a CCSS code at column 0 and the
+    # copyright. Cut at the blank-line gap rather than trying to match the code,
+    # whose shape varies (6.NS.C.6a, 6.RP.A.3, 6.G.A.1 ...).
+    words = grab(r"Words:\s*(.*?)(?=\n\s*\n|Original problems|©|\Z)")
+    return question, words
+
+
 def _prep_dare(url, workdir, tag):
     """DARE PDFs are 2 pages: problem, then answer. We use page 2 as the answer
-    guide image. Returns the answer-guide png path (or None)."""
+    guide image, and lift the Question/Words text off page 1.
+    Returns (answer_guide_png_or_None, question, words)."""
     raw = _download(url, os.path.join(workdir, f"{tag}.bin"))
     if not _is_pdf(raw):
-        return None
+        return None, "", ""
     pdf = os.path.join(workdir, f"{tag}.pdf")
     shutil.move(raw, pdf)
+    question, words = _dare_text(pdf)
     pages = _pdf_pages_to_pngs(pdf, workdir, f"{tag}_p")
     if len(pages) >= 2:
-        return BM.trim(pages[1])
+        return BM.trim(pages[1]), question, words
     if pages:
-        return BM.trim(pages[0])
-    return None
+        return BM.trim(pages[0]), question, words
+    return None, question, words
 
 
 def _prep_image(url, workdir, tag):
@@ -161,6 +194,7 @@ def build_from_kit(kit, out_path, assets, dpi=150):
     L_nums = list(range(1, n_lessons + 1))
     ccss_map = {}
     mt_by, sort_cells, ag_map = {}, {}, {}
+    q_map, w_map = {}, {}
 
     for i in L_nums:
         d, s, t = at(dares, i), at(sorts, i), at(talks, i)
@@ -176,7 +210,9 @@ def build_from_kit(kit, out_path, assets, dpi=150):
 
         if d and d.get("url"):
             try:
-                ag_map[i] = _prep_dare(d["url"], img, f"d{i}")
+                ag, q, w = _prep_dare(d["url"], img, f"d{i}")
+                ag_map[i] = ag
+                q_map[i], w_map[i] = q, w
             except Exception as e:
                 print(f"  (lesson {i} dare: {e})")
         if t and t.get("url"):
@@ -249,9 +285,7 @@ def build_from_kit(kit, out_path, assets, dpi=150):
         elif sec == "rand":
             BM.b_randroutine(prs, MT, L)
         elif sec == "dareroutine":
-            # Question text and word bank are not stored in lab_items; the
-            # builder renders "\u2014" for empty strings.
-            BM.b_dare_routine(prs, MT, L, "", "")
+            BM.b_dare_routine(prs, MT, L, q_map.get(L, ""), w_map.get(L, ""))
         elif sec == "dareguide":
             BM.b_dareguide(prs, MT, L, ag_map.get(L))
         elif sec == "dareedit":
