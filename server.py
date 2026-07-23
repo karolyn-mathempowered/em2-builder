@@ -95,6 +95,7 @@ class KitItem(BaseModel):
 class KitRequest(BaseModel):
     title: Optional[str] = None
     grade: Optional[str] = None
+    module: Optional[str] = None
     # Legacy single-kit payload.
     resource_type: Optional[str] = None
     items: Optional[List[KitItem]] = None
