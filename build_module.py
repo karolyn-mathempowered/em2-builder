@@ -254,10 +254,7 @@ SCHED=[('Math Talk','sched_2.png',RED),('Randomizer','sched_3.png',ORANGE),
 # ---------- slide builders ----------
 def b_toc(prs,MT):
     s=prs.slides.add_slide(prs.slide_layouts[6]); logo(s)
-    text(s,0.6,0.60,8.8,0.8,[[("EM",34,NAVY,True,False,SERIF),("2",20,NAVY,True,False,SERIF),
-        (f"   Grade {MT['grade']} · Module {MT['module']}",34,NAVY,True,False,SERIF)]],align=PP_ALIGN.CENTER)
-    for r in s.shapes[-1].text_frame.paragraphs[0].runs:
-        if r.text=="2": _sup(r)
+    text(s,0.6,0.60,8.8,0.8,[[(f"Grade {MT['grade']} · Module {MT['module']}",34,NAVY,True,False,SERIF)]],align=PP_ALIGN.CENTER)
     text(s,0.6,1.36,8.8,0.4,[[(f"{MT['title']} — Table of Contents",15,TEAL,False,True,SERIF)]],align=PP_ALIGN.CENTER)
     topics=MT['topics']; n=len(topics); gap=0.16; mL=0.5; cw=(SW-2*mL-(n-1)*gap)/n; top=1.95; ch=2.95
     for i,tp in enumerate(topics):
