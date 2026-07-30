@@ -90,6 +90,10 @@ class KitItem(BaseModel):
     name: Optional[str] = None
     standard: Optional[str] = None
     url: str
+    # Optional second Math Talk image for the same lesson. Only used by the
+    # math_talks list; when present, that lesson renders a second Math Talk slide.
+    # Ignored for sorts/dares. Backward-compatible: omitted -> behaves as before.
+    url_2: Optional[str] = None
 
 
 class KitRequest(BaseModel):
