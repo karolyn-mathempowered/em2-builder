@@ -138,8 +138,12 @@ def build_from_kit(kit, out_path, assets, dpi=150):
         "title": str, "grade": int|str,
         "dares":      [{"name","standard","url"}, ...],
         "sorts":      [...],
-        "math_talks": [...]
+        "math_talks": [{"name","standard","url","url_2"?}, ...]
       }
+
+    A math_talks item may carry an optional "url_2" (a second Math Talk image for
+    the same lesson). When present, that lesson renders two Math Talk slides;
+    when absent, one — exactly as before.
 
     Legacy single-kit shape is still accepted:
       kit = {"title","grade","resource_type","items":[...]}
@@ -217,9 +221,19 @@ def build_from_kit(kit, out_path, assets, dpi=150):
                 print(f"  (lesson {i} dare: {e})")
         if t and t.get("url"):
             try:
+                # Primary Math Talk image, plus an optional second one (url_2).
+                # Each image that downloads becomes its own Math Talk slide for
+                # this lesson, in order (primary first, alternate second).
+                imgs = []
                 p = _prep_image(t["url"], img, f"t{i}")
                 if p:
-                    mt_by[i] = [p]
+                    imgs.append(p)
+                if t.get("url_2"):
+                    p2 = _prep_image(t["url_2"], img, f"t{i}b")
+                    if p2:
+                        imgs.append(p2)
+                if imgs:
+                    mt_by[i] = imgs
             except Exception as e:
                 print(f"  (lesson {i} math talk: {e})")
         if s and s.get("url"):
