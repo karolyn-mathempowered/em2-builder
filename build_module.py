@@ -540,17 +540,35 @@ def b_game(prs,MT,L):
     footer(s,MT['lesson_ccss'].get(L,""),MT['grade'],MT['module'],L)
 
 def parse_game_links(raw):
-    out=[]
-    for line in (raw or "").splitlines():
+    """One entry per line. A line that carries more than one URL is split so
+    two pasted entries never render as a single run. PDF targets are dropped —
+    those pages are already appended to the deck."""
+    text=(raw or "").replace("\r\n","\n").replace("\r","\n")
+    strip_chars=" |\t-\u2013\u2014:"
+    entries=[]
+    for line in text.split("\n"):
         line=line.strip()
         if not line: continue
-        label,url=line,""
-        m=re.search(r'(https?://\S+)',line)
-        if m:
-            url=m.group(1)
-            label=line.replace(url,"").strip(" |\t-\u2013\u2014:")
-        if not label: label=url
-        out.append((label,url))
+        urls=list(re.finditer(r'https?://\S+',line))
+        if len(urls)<=1:
+            entries.append(line); continue
+        start=0
+        for m in urls:
+            chunk=line[start:m.end()].strip(strip_chars)
+            if chunk: entries.append(chunk)
+            start=m.end()
+        rest=line[start:].strip(strip_chars)
+        if rest: entries.append(rest)
+    out=[]; seen=set()
+    for e in entries:
+        m=re.search(r'https?://\S+',e)
+        url=m.group(0).rstrip('.,;)') if m else ""
+        label=(e.replace(m.group(0),"") if m else e).strip(strip_chars)
+        label=re.sub(r'\s+',' ',label).strip() or url
+        if url and re.search(r'\.pdf(\?|$)',url,re.I): continue
+        key=(label.lower(),url)
+        if key in seen: continue
+        seen.add(key); out.append((label,url))
     return out
 
 def b_game_divider(prs,MT):
