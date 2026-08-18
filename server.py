@@ -3,22 +3,16 @@ EM2 Module Builder — backend API.
 Wraps build_module.py behind a single endpoint that a web app (e.g. a Lovable
 frontend) can call. Accepts the 4 source .pptx files and returns the finished deck.
 
-Also exposes /generate-from-kit, which builds a deck from Resource Lab saved
-kits (DARE / Sort / Math Talk) zipped by position: item i of each list becomes
-Lesson i.
-
 Run locally:   uvicorn server:app --reload --port 8000
 Deploy:        see Dockerfile (installs LibreOffice + poppler + python deps)
 """
 import os, tempfile
 from types import SimpleNamespace
-from typing import Optional, List
+from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import build_module
-import build_kit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
@@ -44,34 +38,38 @@ def health():
 
 @app.post("/generate")
 async def generate(
-    mathtalks: UploadFile = File(...),
-    dares: UploadFile = File(...),
-    answerguides: UploadFile = File(...),
+    mathtalks: Optional[UploadFile] = File(None),
+    dares: Optional[UploadFile] = File(None),
+    answerguides: Optional[UploadFile] = File(None),
     sorts: Optional[UploadFile] = File(None),
-    # Optional pre-rendered PDFs. When supplied, the server skips LibreOffice for
-    # that file and rasterizes the PDF instead (much lower memory use).
     mathtalks_pdf: Optional[UploadFile] = File(None),
     dares_pdf: Optional[UploadFile] = File(None),
     answerguides_pdf: Optional[UploadFile] = File(None),
     sorts_pdf: Optional[UploadFile] = File(None),
+    tasks_pdf: Optional[UploadFile] = File(None),
+    games_pdf: Optional[UploadFile] = File(None),
     title: Optional[str] = Form(None),
     grade: Optional[str] = Form(None),
     module: Optional[str] = Form(None),
+    sorts_lessons: Optional[str] = Form(None),
+    game_links: Optional[str] = Form(None),
 ):
     work = tempfile.mkdtemp()
     try:
-        mt = _save(mathtalks, work)
-        dr = _save(dares, work)
-        ag = _save(answerguides, work)
-        so = _save(sorts, work) if sorts is not None else None
-        mt_pdf = _save(mathtalks_pdf, work) if mathtalks_pdf is not None else None
-        dr_pdf = _save(dares_pdf, work) if dares_pdf is not None else None
-        ag_pdf = _save(answerguides_pdf, work) if answerguides_pdf is not None else None
-        so_pdf = _save(sorts_pdf, work) if sorts_pdf is not None else None
+        def pick(pptx, pdf, label, required):
+            up = pptx or pdf
+            if up is None:
+                if required:
+                    raise HTTPException(422, f"{label}: attach a .pptx or a .pdf.")
+                return None
+            return _save(up, work)
+
+        mt = pick(mathtalks, mathtalks_pdf, "Math Talks", True)
+        dr = pick(dares, dares_pdf, "DAREs", True)
+        ag = pick(answerguides, answerguides_pdf, "DARE Answer Guides", False) or dr
+        so = pick(sorts, sorts_pdf, "Sorts", False)
         out = os.path.join(work, "module.pptx")
         ns = SimpleNamespace(mathtalks=mt, sorts=so, dares=dr, answerguides=ag,
-                             mathtalks_pdf=mt_pdf, sorts_pdf=so_pdf,
-                             dares_pdf=dr_pdf, answerguides_pdf=ag_pdf,
                              out=out, title=(title or None), topics=None,
                              grade=_toint(grade), module=_toint(module), assets=ASSETS)
         build_module.build(ns)
@@ -80,64 +78,6 @@ async def generate(
         fname = ((title or "EM2_Module").strip().replace(" ", "_") or "EM2_Module") + ".pptx"
         return FileResponse(out, filename=fname,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-    except HTTPException:
-        raise
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-
-class KitItem(BaseModel):
-    name: Optional[str] = None
-    standard: Optional[str] = None
-    url: str
-    # Optional second Math Talk image for the same lesson. Only used by the
-    # math_talks list; when present, that lesson renders a second Math Talk slide.
-    # Ignored for sorts/dares. Backward-compatible: omitted -> behaves as before.
-    url_2: Optional[str] = None
-
-
-class KitRequest(BaseModel):
-    title: Optional[str] = None
-    grade: Optional[str] = None
-    module: Optional[str] = None
-    # Legacy single-kit payload.
-    resource_type: Optional[str] = None
-    items: Optional[List[KitItem]] = None
-    # Three kits zipped by position: item i of each becomes Lesson i.
-    dares: Optional[List[KitItem]] = None
-    sorts: Optional[List[KitItem]] = None
-    math_talks: Optional[List[KitItem]] = None
-
-
-@app.post("/generate-from-kit")
-def generate_from_kit(req: KitRequest):
-    work = tempfile.mkdtemp()
-    try:
-        out = os.path.join(work, "kit.pptx")
-        def L(x):
-            return [i.dict() for i in (x or [])]
-        build_kit.build_from_kit(
-            {
-                "title": req.title,
-                "grade": req.grade,
-                "resource_type": req.resource_type,
-                "items": L(req.items),
-                "dares": L(req.dares),
-                "sorts": L(req.sorts),
-                "math_talks": L(req.math_talks),
-                "module": req.module,
-            },
-            out,
-            ASSETS,
-        )
-        if not os.path.exists(out):
-            raise HTTPException(500, "Deck was not produced.")
-        fname = ((req.title or "EM2_Kit").strip().replace(" ", "_") or "EM2_Kit") + ".pptx"
-        return FileResponse(
-            out,
-            filename=fname,
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
     except HTTPException:
         raise
     except Exception as e:
