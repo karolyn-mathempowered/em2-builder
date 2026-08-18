@@ -53,6 +53,8 @@ async def generate(
     module: Optional[str] = Form(None),
     sorts_lessons: Optional[str] = Form(None),
     game_links: Optional[str] = Form(None),
+    lesson_from: Optional[str] = Form(None),
+    lesson_to: Optional[str] = Form(None),
 ):
     work = tempfile.mkdtemp()
     try:
@@ -66,16 +68,25 @@ async def generate(
 
         mt = pick(mathtalks, mathtalks_pdf, "Math Talks", True)
         dr = pick(dares, dares_pdf, "DAREs", True)
-        ag = pick(answerguides, answerguides_pdf, "DARE Answer Guides", False) or dr
+        ag = pick(answerguides, answerguides_pdf, "DARE Answer Guides", False)
         so = pick(sorts, sorts_pdf, "Sorts", False)
+        tk = pick(None, tasks_pdf, "Math Tasks", False)
+        gm = pick(None, games_pdf, "Games", False)
         out = os.path.join(work, "module.pptx")
         ns = SimpleNamespace(mathtalks=mt, sorts=so, dares=dr, answerguides=ag,
+                             tasks=tk, games=gm, game_links=(game_links or None),
+                             sorts_lessons=(sorts_lessons or None),
                              out=out, title=(title or None), topics=None,
-                             grade=_toint(grade), module=_toint(module), assets=ASSETS)
+                             grade=(grade or None), module=(module or None),
+                             lesson_from=(lesson_from or None), lesson_to=(lesson_to or None),
+                             assets=ASSETS)
         build_module.build(ns)
         if not os.path.exists(out):
             raise HTTPException(500, "Deck was not produced.")
-        fname = ((title or "EM2_Module").strip().replace(" ", "_") or "EM2_Module") + ".pptx"
+        fname = ((title or "Daily_Slides").strip().replace(" ", "_") or "Daily_Slides")
+        if lesson_from or lesson_to:
+            fname += f"_Lessons_{lesson_from or '1'}-{lesson_to or 'end'}"
+        fname += ".pptx"
         return FileResponse(out, filename=fname,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
     except HTTPException:
