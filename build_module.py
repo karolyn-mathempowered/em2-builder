@@ -141,13 +141,96 @@ def detect_dares(dares_src):
     return grade, module, [lessons[k] for k in sorted(lessons)], texts
 
 def detect_sort_lessons(sorts_pptx):
-    texts=slide_texts(sorts_pptx); mapping={}; i=0
+    return _sort_map_from_texts(slide_texts(sorts_pptx))
+
+def _sort_map_from_texts(texts):
+    """Text-layer path: read the lesson off each LABEL sheet (Grade K style).
+    Returns {lesson: 1-based page number of the CARD sheet}."""
+    mapping={}; i=0
     while i<len(texts):
-        lab=re.search(r'\bL(\d+)\b',texts[i])
-        if lab and texts[i].count('L'+lab.group(1))>=3 and i+1<len(texts):
+        lab=re.search(r'\bL(\d+)\b',texts[i] or "")
+        if lab and (texts[i] or "").count('L'+lab.group(1))>=3 and i+1<len(texts):
             mapping[int(lab.group(1))]=i+2; i+=2
         else: i+=1
     return mapping
+
+def parse_lesson_list(raw):
+    """'1, 4, 7-9' -> [1,4,7,8,9]. Order is preserved; the i-th number is the
+    i-th sort in the file."""
+    out=[]
+    for chunk in re.split(r'[^0-9\-]+',str(raw or "")):
+        chunk=chunk.strip()
+        if not chunk: continue
+        m=re.match(r'^(\d+)-(\d+)$',chunk)
+        if m:
+            a,b=int(m.group(1)),int(m.group(2))
+            out.extend(range(a,b+1) if a<=b else range(a,b-1,-1))
+        elif chunk.isdigit():
+            out.append(int(chunk))
+    return out
+
+def plan_sorts(sorts_src,sorts_lessons,warn):
+    """Resolution order:
+       1. text layer on the label sheets  -> parse the lesson (Grade K path)
+       2. no text layer + sorts_lessons   -> i-th sort is the i-th number
+       3. neither                         -> warn, naming every sort index
+    Returns {lesson: 1-based CARD-sheet page number}."""
+    texts=slide_texts(sorts_src)
+    n_pages=len(texts)
+    mapping=_sort_map_from_texts(texts)
+    if mapping:
+        print(f"  Sorts: text layer found, {len(mapping)} sorts parsed from the label sheets")
+        return mapping
+    n_sorts=n_pages//2
+    nums=parse_lesson_list(sorts_lessons)
+    if not nums:
+        warn(f"The Sorts file has no text layer (all {n_pages} pages return zero characters) and no "
+             f"Sort lesson numbers were supplied, so sorts 1-{max(n_sorts,1)} could not be placed. "
+             f"Enter the lesson number of each sort, in file order.")
+        return {}
+    if len(nums)!=n_sorts:
+        warn(f"The Sorts file has no text layer and holds {n_sorts} sorts ({n_pages} pages), but "
+             f"{len(nums)} lesson numbers were supplied. Pairing as far as the shorter list goes.")
+    for i in range(n_sorts):
+        card=2*i+2
+        if i<len(nums):
+            mapping[nums[i]]=card
+        else:
+            warn(f"Sort {i+1} (pages {card-1}-{card}) has no lesson number and was not placed.")
+    print(f"  Sorts: no text layer; sorts_lessons placed {len(mapping)} sorts -> "
+          f"{sorted(mapping)}")
+    return mapping
+
+ANSWER_GUIDE_RE=re.compile(r'ANSWER\s+GUIDE',re.I)
+
+def detect_tasks(texts,warn=None):
+    """Groups Math Task pages into per-lesson task/answer pairs.
+
+    The header may be emitted anywhere on the page, so the whole page string is
+    searched. Within a lesson, in file order, a page carrying ANSWER GUIDE closes
+    the task opened by the page before it -- pairing is structural, never by
+    counting pages. Nothing is capped or sampled.
+    Returns {lesson: [{'q': page_idx|None, 'a': [page_idx, ...]}, ...]}
+    """
+    by={}
+    for i,t in enumerate(texts):
+        m=re.search(r'Lesson\s*(\d+)',t or "",re.I)
+        if not m: continue
+        by.setdefault(int(m.group(1)),[]).append(i)
+    out={}
+    for n in sorted(by):
+        tasks=[]; cur=None
+        for pg in by[n]:
+            if ANSWER_GUIDE_RE.search(texts[pg] or ""):
+                if cur is None:
+                    cur={'q':None,'a':[]}; tasks.append(cur)
+                    if warn: warn(f"Lesson {n}: an ANSWER GUIDE page (page {pg+1}) has no task page "
+                                  f"before it; it was kept on its own.")
+                cur['a'].append(pg)
+            else:
+                cur={'q':pg,'a':[]}; tasks.append(cur)
+        out[n]=tasks
+    return out
 
 # ---------- rendering / image ops ----------
 RENDER_DPI = int(os.environ.get("RENDER_DPI", "120"))
@@ -162,6 +245,15 @@ def _progress(**kw):
     if PROGRESS:
         try: PROGRESS(**kw)
         except Exception: pass
+
+# Every build collects its own warnings. A source page that cannot be placed is
+# always reported -- silent dropping is never acceptable.
+WARNINGS=[]
+
+def _warn(msg):
+    print("WARNING:",msg)
+    WARNINGS.append(msg)
+    _progress(warning=msg)
 
 
 def _pdf_of(src):
@@ -508,6 +600,14 @@ def b_task(prs,MT,L,page):
     else: dropzone(s,1.0,1.25,8.0,3.6,"Drop the Math Task page here","taskImg")
     footer(s,MT['lesson_ccss'].get(L,""),MT['grade'],MT['module'],L)
 
+def b_task_answer(prs,MT,L,page):
+    """The ANSWER GUIDE page that closes a task, shown right after it."""
+    s=prs.slides.add_slide(prs.slide_layouts[6]); logo(s); section_pill(s,"TASK",TEAL)
+    title(s,"Math Task Answer Guide",TEAL,size=26); timer(s,180)
+    if page and os.path.exists(page): fit_pic(s,page,*PAGE_BOX,frame=True)
+    else: dropzone(s,1.0,1.25,8.0,3.6,"Drop the task answer-guide page here","taskAnswerImg")
+    footer(s,MT['lesson_ccss'].get(L,""),MT['grade'],MT['module'],L)
+
 def b_dare_routine(prs,MT,L,question,words):
     s=prs.slides.add_slide(prs.slide_layouts[6]); logo(s); section_pill(s,"DARE",GREEN)
     title(s,"DARE Routine",GREEN); timer(s,420)
@@ -620,6 +720,7 @@ def auto_topics(L_nums):
 
 def build(args):
     global ASSETS; ASSETS=args.assets
+    del WARNINGS[:]
     g=lambda name,default=None: getattr(args,name,default)
     tmp=tempfile.mkdtemp(); img=os.path.join(tmp,'img'); os.makedirs(img,exist_ok=True)
     print("Reading DARE problems\u2026")
@@ -651,11 +752,21 @@ def build(args):
     print("Rendering Sorts\u2026"); _progress(stage="rendering sorts")
     sort_cells={}
     if g('sorts'):
+        raw_list=g('sorts_lessons')
+        print("  sorts_lessons received:",
+              parse_lesson_list(raw_list) if not _blank(raw_list) else "none supplied")
         try:
-            sp=detect_sort_lessons(args.sorts); sorts=render_to_pngs(args.sorts,img,'so')
-            for ln,front in sp.items():
-                if ln in keep and 1<=front<=len(sorts): sort_cells[ln]=crop_sort_cells(trim(sorts[front-1]),img,f'L{ln}')
-        except Exception as e: print("  (no sorts:",e,")")
+            sp=plan_sorts(args.sorts,raw_list,_warn)
+            sorts=render_to_pngs(args.sorts,img,'so')
+            for ln,front in sorted(sp.items()):
+                if ln not in keep: continue
+                if 1<=front<=len(sorts):
+                    sort_cells[ln]=crop_sort_cells(trim(sorts[front-1]),img,f'L{ln}')
+                else:
+                    _warn(f"Lesson {ln}: the sort points at page {front}, but the Sorts file only has "
+                          f"{len(sorts)} pages. That sort was not placed.")
+        except Exception as e:
+            _warn(f"The Sorts file could not be read: {e}")
 
     print("Rendering DARE pages\u2026"); _progress(stage="rendering DARE pages")
     dare_png=render_to_pngs(args.dares,img,'dr')
@@ -677,15 +788,36 @@ def build(args):
         for i,n in enumerate(L_all):
             if n in keep and i<len(ag): ag_map[n]=crop_box(ag[i],AG_CROP,os.path.join(img,f'agc_{n}.jpg'))
 
-    task_page={}
+    # Every task of every lesson, in file order, as question + ANSWER GUIDE.
+    task_slides={}
     if g('tasks'):
         try:
             t_texts=slide_texts(args.tasks); t_png=render_to_pngs(args.tasks,img,'tk')
-            for i,t in enumerate(t_texts):
-                m=re.search(r'Lesson\s*(\d+)',t,re.I)
-                if m and i<len(t_png) and int(m.group(1)) in keep:
-                    task_page.setdefault(int(m.group(1)),trim(t_png[i]))
-        except Exception as e: print("  (no tasks:",e,")")
+            grouped=detect_tasks(t_texts,_warn)
+            unread=sum(1 for t in t_texts if not (t or "").strip())
+            if unread:
+                _warn(f"The Math Tasks file has {unread} page(s) with no readable text; those pages "
+                      f"could not be assigned to a lesson.")
+            for n,tasks in grouped.items():
+                if n not in keep: continue
+                seq=[]
+                for k,tk in enumerate(tasks):
+                    q=tk['q']
+                    if q is not None and q<len(t_png):
+                        seq.append(('task',trim(t_png[q])))
+                    elif q is not None:
+                        _warn(f"Lesson {n}, task {k+1}: page {q+1} was not rendered.")
+                    for a in tk['a']:
+                        if a<len(t_png): seq.append(('taskans',trim(t_png[a])))
+                        else: _warn(f"Lesson {n}, task {k+1}: answer page {a+1} was not rendered.")
+                    if q is not None and not tk['a']:
+                        _warn(f"Lesson {n}, task {k+1} has no ANSWER GUIDE page in the source.")
+                if seq: task_slides[n]=seq
+            placed=sum(len(v) for v in task_slides.values())
+            print(f"  Math Tasks: {sum(len(v) for v in grouped.values())} tasks found, "
+                  f"{placed} task slides in this range")
+        except Exception as e:
+            _warn(f"The Math Tasks file could not be read: {e}")
 
     game_pages=[]
     if g('games'):
@@ -707,8 +839,8 @@ def build(args):
         if n in sort_cells: secs+=['sort','rand']
         secs+=['dareroutine','dareguide','dareedit']
         if ag_map.get(n): secs+=['answer']
-        if n in task_page: secs+=['task']
         secs+=['game']
+        for i in range(len(task_slides.get(n,[]))): secs+=[f'tk{i}']
         for sec in secs: plan.append((n,sec))
     tail=[]
     if game_links or game_pages:
@@ -743,9 +875,9 @@ def build(args):
                 parts+=['Randomizer','Sort']
                 chip['Randomizer']=idx[(L,'rand')]; chip['Sort']=idx[(L,'sort')]
             parts+=['DARE']
-            if L in task_page:
-                parts+=['Task']; chip['Task']=idx[(L,'task')]
             parts+=['Game']
+            if task_slides.get(L):
+                parts+=['Task']; chip['Task']=idx[(L,'tk0')]
             b_welcome(prs,MT,L,parts,chip)
         elif sec=='mtr': b_mt_routine(prs,MT,L)
         elif sec.startswith('mtp'): b_mt(prs,MT,L,mt_by[L][int(sec[3:])])
@@ -757,7 +889,9 @@ def build(args):
         elif sec=='dareguide': b_dareguide(prs,MT,L,ag_map.get(L))
         elif sec=='dareedit': b_dareedit(prs,MT,L,ag_map.get(L))
         elif sec=='answer': b_answer_page(prs,MT,L,ag_map.get(L))
-        elif sec=='task': b_task(prs,MT,L,task_page.get(L))
+        elif sec.startswith('tk'):
+            kind,page=task_slides[L][int(sec[2:])]
+            (b_task if kind=='task' else b_task_answer)(prs,MT,L,page)
         elif sec=='game': b_game(prs,MT,L)
         elif sec=='gamedivider': b_game_divider(prs,MT)
         elif sec=='gamelinks': b_game_links(prs,MT,game_links)
@@ -810,6 +944,7 @@ if __name__=="__main__":
     ap.add_argument('--dares',required=True); ap.add_argument('--answerguides',default=None)
     ap.add_argument('--tasks',default=None); ap.add_argument('--games',default=None)
     ap.add_argument('--game-links',dest='game_links',default=None)
+    ap.add_argument('--sorts-lessons',dest='sorts_lessons',default=None)
     ap.add_argument('--out',required=True); ap.add_argument('--title',default=None)
     ap.add_argument('--topics',default=None); ap.add_argument('--grade',default=None)
     ap.add_argument('--lesson-from',dest='lesson_from',default=None)
