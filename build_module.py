@@ -152,6 +152,17 @@ def detect_sort_lessons(sorts_pptx):
 # ---------- rendering / image ops ----------
 RENDER_DPI = int(os.environ.get("RENDER_DPI", "120"))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "80"))
+GAME_RENDER_DPI = int(os.environ.get("GAME_RENDER_DPI", "90"))
+
+# Progress hook. The API server sets build_module.PROGRESS to a callable so a
+# background job can report honest, source-backed progress. Never a guessed %.
+PROGRESS = None
+
+def _progress(**kw):
+    if PROGRESS:
+        try: PROGRESS(**kw)
+        except Exception: pass
+
 
 def _pdf_of(src):
     """Returns a PDF path for src, converting a .pptx exactly once."""
@@ -177,7 +188,9 @@ def render_to_pngs(pptx,outdir,prefix,dpi=None):
     pdf=_pdf_of(pptx)
     subprocess.run(["pdftoppm","-jpeg","-jpegopt",f"quality={JPEG_QUALITY}",
                     "-r",str(dpi or RENDER_DPI),pdf,os.path.join(outdir,prefix)],check=True)
-    return sorted(glob.glob(os.path.join(outdir,prefix+"*.jpg")))
+    files=sorted(glob.glob(os.path.join(outdir,prefix+"*.jpg")))
+    _progress(pages_rendered=len(files))
+    return files
 
 def trim(path,pad=8):
     with Image.open(path) as src:
@@ -626,15 +639,16 @@ def build(args):
     q_map={d['n']:d['question'] for d in dares}; w_map={d['n']:d['words'] for d in dares}
     page_map={d['n']:d['page'] for d in dares}
     print(f"  Grade {grade or '(unknown)'}, Module {module or '(unknown)'}, {N} lessons")
+    _progress(lessons_total=N, stage="reading DARE problems")
 
-    print("Rendering Math Talks\u2026")
+    print("Rendering Math Talks\u2026"); _progress(stage="rendering math talks")
     mt_by,mt_png=detect_mathtalks(args.mathtalks,img,keep)
     if not mt_by:
         for i,n in enumerate(L_all):
             if n in keep: mt_by[n]=[trim(p) for p in mt_png[2*i:2*i+2]] or [None,None]
     for n in L_nums: mt_by.setdefault(n,[None,None])
 
-    print("Rendering Sorts\u2026")
+    print("Rendering Sorts\u2026"); _progress(stage="rendering sorts")
     sort_cells={}
     if g('sorts'):
         try:
@@ -643,11 +657,11 @@ def build(args):
                 if ln in keep and 1<=front<=len(sorts): sort_cells[ln]=crop_sort_cells(trim(sorts[front-1]),img,f'L{ln}')
         except Exception as e: print("  (no sorts:",e,")")
 
-    print("Rendering DARE pages\u2026")
+    print("Rendering DARE pages\u2026"); _progress(stage="rendering DARE pages")
     dare_png=render_to_pngs(args.dares,img,'dr')
     dare_page={n:(trim(dare_png[page_map[n]]) if page_map[n]<len(dare_png) else None) for n in L_nums}
 
-    print("Rendering DARE answer guides\u2026")
+    print("Rendering DARE answer guides\u2026"); _progress(stage="rendering answer guides")
     ag_map={}
     same_file=(not g('answerguides')) or os.path.abspath(str(args.answerguides))==os.path.abspath(str(args.dares))
     if same_file:
@@ -675,7 +689,7 @@ def build(args):
 
     game_pages=[]
     if g('games'):
-        try: game_pages=[trim(p) for p in render_to_pngs(args.games,img,'gm')]
+        try: game_pages=[trim(p) for p in render_to_pngs(args.games,img,'gm',dpi=GAME_RENDER_DPI)]
         except Exception as e: print("  (no game pages:",e,")")
     game_links=parse_game_links(g('game_links'))
 
@@ -714,9 +728,12 @@ def build(args):
     MT={'grade':grade,'module':module,'title':g('title') or head or "Daily Presentation Slides",
         'topics':topics,'lesson_ccss':ccss_map,'welcome_idx':welcome_idx,'ccss_range':crange}
 
-    print("Building slides\u2026")
+    print("Building slides\u2026"); _progress(stage="building slides")
     prs=Presentation(); prs.slide_width=Emu(9144000); prs.slide_height=Emu(5143500)
+    _done_lessons=set()
     for (L,sec) in plan:
+        if L and L not in _done_lessons:
+            _done_lessons.add(L); _progress(lessons_done=len(_done_lessons))
         if sec=='toc': b_toc(prs,MT)
         elif sec=='welcome':
             has=L in sort_cells
@@ -746,7 +763,9 @@ def build(args):
         elif sec=='gamelinks': b_game_links(prs,MT,game_links)
         elif sec.startswith('gamepage'): b_game_page(prs,MT,game_pages[int(sec[8:])])
     raw=os.path.join(tmp,'raw.pptx'); prs.save(raw)
+    _progress(stage="wiring timers & links", slides=len(plan))
     print("Wiring timers & links\u2026"); postprocess(raw,args.out); print("DONE \u2192",args.out)
+    _progress(stage="done", slides=len(plan))
 
 # ---------- post-process: timers + links ----------
 TIMING='''<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="5" presetID="22" presetClass="exit" presetSubtype="0" fill="hold" grpId="0" nodeType="afterEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="6" dur="1" fill="hold"><p:stCondLst><p:cond delay="{D}"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{S}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set><p:animEffect transition="out" filter="wipe(right)"><p:cBhvr><p:cTn id="7" dur="{D}"/><p:tgtEl><p:spTgt spid="{S}"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst><p:bldP spid="{S}" grpId="0"/></p:bldLst></p:timing>'''

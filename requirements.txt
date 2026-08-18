@@ -4,4 +4,3 @@ python-multipart
 python-pptx
 Pillow
 numpy
-requests
