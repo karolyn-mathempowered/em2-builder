@@ -36,20 +36,37 @@ def shape_text(shapes):
                 for c in r.cells: out.append(c.text)
         if sh.has_text_frame: out.append(sh.text_frame.text)
     return "\n".join(out)
-def slide_texts(pptx): return [shape_text(s.shapes) for s in Presentation(pptx).slides]
+def _is_pdf(path): return str(path).lower().endswith(".pdf")
+
+def _pdf_texts(pdf):
+    """Per-page text of a PDF via poppler's pdftotext."""
+    out=[]
+    n=0
+    try:
+        info=subprocess.run(["pdfinfo",pdf],check=True,capture_output=True,text=True).stdout
+        m=re.search(r'Pages:\s*(\d+)',info)
+        n=int(m.group(1)) if m else 0
+    except Exception:
+        n=0
+    for p in range(1,n+1):
+        try:
+            t=subprocess.run(["pdftotext","-layout","-f",str(p),"-l",str(p),pdf,"-"],
+                             check=True,capture_output=True,text=True).stdout
+        except Exception:
+            t=""
+        out.append(t)
+    return out
+
+def slide_texts(src):
+    if _is_pdf(src): return _pdf_texts(src)
+    return [shape_text(s.shapes) for s in Presentation(src).slides]
 
 def detect_dares(dares_pptx):
     texts=slide_texts(dares_pptx); grade=module=None; lessons={}
     for t in texts:
         gm=re.search(r'Grade\s*(\d+),\s*Module\s*(\d+)',t)
         if gm and grade is None: grade,module=int(gm.group(1)),int(gm.group(2))
-        # Lesson labels appear in two conventions across our source decks:
-        #   long form  -> "Lesson 1", "Lesson 2", ...
-        #   short form -> "L1 Question:", "L2 Question:", ...
-        # Match the long form first (existing behaviour), then fall back to the
-        # short form. The short-form pattern is anchored to "Question" so a bare
-        # token like an L in a standard code can't be mistaken for a lesson.
-        ln=re.search(r'Lesson\s*(\d+)',t) or re.search(r'\bL(\d+)\s*Question',t)
+        ln=re.search(r'Lesson\s*(\d+)',t)
         if not ln: continue
         n=int(ln.group(1))
         q=re.search(r'L\d+\s*Question:\s*(.*?)\s*Answer Statement:',t,re.S)
@@ -70,24 +87,16 @@ def detect_sort_lessons(sorts_pptx):
     return mapping
 
 # ---------- rendering / image ops ----------
-# Optional map of {source_pptx_path: pre_rendered_pdf_path}. When a source file
-# has an entry here, we skip the memory-heavy LibreOffice step and rasterize the
-# supplied PDF directly with pdftoppm (poppler), which uses far less memory.
-PRERENDERED_PDFS = {}
-
 def render_to_pngs(pptx,outdir,prefix,dpi=150):
-    os.makedirs(outdir,exist_ok=True); work=tempfile.mkdtemp()
-    supplied=PRERENDERED_PDFS.get(pptx)
-    if supplied and os.path.exists(supplied):
-        # Use the pre-rendered PDF; no LibreOffice needed.
-        pdf=supplied
-    else:
-        # Fall back to converting the pptx with LibreOffice (original behaviour).
-        shutil.copy(pptx,work)
-        base=os.path.join(work,os.path.basename(pptx))
-        subprocess.run(["soffice","--headless","--convert-to","pdf","--outdir",work,base],
-                       check=True,capture_output=True,timeout=300,env={**os.environ,"HOME":work})
-        pdf=base.rsplit('.',1)[0]+'.pdf'
+    os.makedirs(outdir,exist_ok=True)
+    if _is_pdf(pptx):
+        subprocess.run(["pdftoppm","-png","-r",str(dpi),pptx,os.path.join(outdir,prefix)],check=True)
+        return sorted(glob.glob(os.path.join(outdir,prefix+"*.png")))
+    work=tempfile.mkdtemp(); shutil.copy(pptx,work)
+    base=os.path.join(work,os.path.basename(pptx))
+    subprocess.run(["soffice","--headless","--convert-to","pdf","--outdir",work,base],
+                   check=True,capture_output=True,timeout=300,env={**os.environ,"HOME":work})
+    pdf=base.rsplit('.',1)[0]+'.pdf'
     subprocess.run(["pdftoppm","-png","-r",str(dpi),pdf,os.path.join(outdir,prefix)],check=True)
     return sorted(glob.glob(os.path.join(outdir,prefix+"*.png")))
 
@@ -254,7 +263,10 @@ SCHED=[('Math Talk','sched_2.png',RED),('Randomizer','sched_3.png',ORANGE),
 # ---------- slide builders ----------
 def b_toc(prs,MT):
     s=prs.slides.add_slide(prs.slide_layouts[6]); logo(s)
-    text(s,0.6,0.60,8.8,0.8,[[(f"Grade {MT['grade']} · Module {MT['module']}",34,NAVY,True,False,SERIF)]],align=PP_ALIGN.CENTER)
+    text(s,0.6,0.60,8.8,0.8,[[("EM",34,NAVY,True,False,SERIF),("2",20,NAVY,True,False,SERIF),
+        (f"   Grade {MT['grade']} · Module {MT['module']}",34,NAVY,True,False,SERIF)]],align=PP_ALIGN.CENTER)
+    for r in s.shapes[-1].text_frame.paragraphs[0].runs:
+        if r.text=="2": _sup(r)
     text(s,0.6,1.36,8.8,0.4,[[(f"{MT['title']} — Table of Contents",15,TEAL,False,True,SERIF)]],align=PP_ALIGN.CENTER)
     topics=MT['topics']; n=len(topics); gap=0.16; mL=0.5; cw=(SW-2*mL-(n-1)*gap)/n; top=1.95; ch=2.95
     for i,tp in enumerate(topics):
@@ -386,14 +398,6 @@ def auto_topics(L_nums):
 
 def build(args):
     global ASSETS; ASSETS=args.assets
-    # If pre-rendered PDFs were supplied (to skip LibreOffice / save memory),
-    # register them keyed by their source pptx path.
-    PRERENDERED_PDFS.clear()
-    for src_attr, pdf_attr in (("mathtalks","mathtalks_pdf"),("sorts","sorts_pdf"),
-                               ("answerguides","answerguides_pdf"),("dares","dares_pdf")):
-        src=getattr(args, src_attr, None); pdf=getattr(args, pdf_attr, None)
-        if src and pdf and os.path.exists(pdf):
-            PRERENDERED_PDFS[src]=pdf
     tmp=tempfile.mkdtemp(); img=os.path.join(tmp,'img'); os.makedirs(img,exist_ok=True)
     print("Reading DARE problems…")
     grade,module,dares=detect_dares(args.dares)
